@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.python-version
+# old root-level stubs (superseded by yui/ package)
+browser.py
+main.py
+tui.py
+requirements.txt
