@@ -13,11 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BRAVE_PATH = "/usr/bin/brave-browser"
-# Use the real Brave profile so sessions/passwords/settings are already there.
-# Falls back to a dedicated yui profile if Brave was never installed normally.
-_REAL_PROFILE = Path.home() / ".config" / "BraveSoftware" / "Brave-Browser"
-_YUI_PROFILE = Path.home() / ".config" / "yui" / "browser-profile"
-PROFILE_DIR = _REAL_PROFILE if _REAL_PROFILE.exists() else _YUI_PROFILE
+PROFILE_DIR = Path.home() / ".config" / "yui" / "browser-profile"
 HISTORY_FILE = Path.home() / ".config" / "yui" / "history.json"
 YTM_URL = "https://music.youtube.com"
 HISTORY_MAX = 50
@@ -63,9 +59,7 @@ class YTMBrowser:
         from playwright.async_api import async_playwright
 
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        _YUI_PROFILE.mkdir(parents=True, exist_ok=True)  # always ensure fallback exists
-        for lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-            (PROFILE_DIR / lock).unlink(missing_ok=True)
+        self._remove_stale_locks()
 
         if not self.visible:
             self._start_xvfb()
@@ -114,6 +108,26 @@ class YTMBrowser:
             pass
 
         await self._handle_consent()
+
+    def _remove_stale_locks(self) -> None:
+        """Remove SingletonLock only if the owning process is no longer alive."""
+        lock = PROFILE_DIR / "SingletonLock"
+        if not lock.exists():
+            return
+        try:
+            # SingletonLock is a symlink: hostname-pid
+            target = os.readlink(lock)
+            pid = int(target.split("-")[-1])
+            os.kill(pid, 0)  # signal 0 = check existence only
+            # Process is alive — do NOT remove the lock, raise instead
+            raise RuntimeError(
+                f"Brave is already running (pid {pid}). "
+                "Close it before starting yui."
+            )
+        except (ValueError, OSError):
+            # Process is dead or link is malformed — safe to clean up
+            for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                (PROFILE_DIR / name).unlink(missing_ok=True)
 
     def _start_xvfb(self) -> None:
         try:
