@@ -8,12 +8,16 @@ import asyncio
 import dataclasses
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 BRAVE_PATH = "/usr/bin/brave-browser"
+# yui's own sandboxed profile (used for headless Xvfb operation)
 PROFILE_DIR = Path.home() / ".config" / "yui" / "browser-profile"
+# Real Brave profile — used during --login so the session is already present
+REAL_PROFILE_DIR = Path.home() / ".config" / "BraveSoftware" / "Brave-Browser"
 HISTORY_FILE = Path.home() / ".config" / "yui" / "history.json"
 YTM_URL = "https://music.youtube.com"
 HISTORY_MAX = 50
@@ -58,15 +62,19 @@ class YTMBrowser:
     async def start(self) -> None:
         from playwright.async_api import async_playwright
 
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        self._remove_stale_locks()
+        # --login: open on real display using real Brave profile (already signed in).
+        # normal:  Xvfb + yui-specific profile (session copied from real profile).
+        active_profile = REAL_PROFILE_DIR if (self.visible and REAL_PROFILE_DIR.exists()) else PROFILE_DIR
+        active_profile.mkdir(parents=True, exist_ok=True)
+        self._active_profile = active_profile
+        self._remove_stale_locks(active_profile)
 
         if not self.visible:
             self._start_xvfb()
 
         self._playwright = await async_playwright().start()
         self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE_DIR),
+            user_data_dir=str(active_profile),
             headless=False,
             executable_path=BRAVE_PATH,
             args=[
@@ -109,25 +117,41 @@ class YTMBrowser:
 
         await self._handle_consent()
 
-    def _remove_stale_locks(self) -> None:
+    def _remove_stale_locks(self, profile: Path) -> None:
         """Remove SingletonLock only if the owning process is no longer alive."""
-        lock = PROFILE_DIR / "SingletonLock"
+        lock = profile / "SingletonLock"
         if not lock.exists():
             return
         try:
-            # SingletonLock is a symlink: hostname-pid
             target = os.readlink(lock)
             pid = int(target.split("-")[-1])
-            os.kill(pid, 0)  # signal 0 = check existence only
-            # Process is alive — do NOT remove the lock, raise instead
+            os.kill(pid, 0)  # signal 0 = just check existence
             raise RuntimeError(
                 f"Brave is already running (pid {pid}). "
                 "Close it before starting yui."
             )
         except (ValueError, OSError):
-            # Process is dead or link is malformed — safe to clean up
             for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-                (PROFILE_DIR / name).unlink(missing_ok=True)
+                (profile / name).unlink(missing_ok=True)
+
+    def _sync_session_to_yui(self) -> None:
+        """Copy Google session cookies from the real Brave profile to yui's profile."""
+        src = REAL_PROFILE_DIR / "Default"
+        dst = PROFILE_DIR / "Default"
+        dst.mkdir(parents=True, exist_ok=True)
+        # Cookies live in different places across Brave versions
+        for rel in [Path("Cookies"), Path("Network") / "Cookies"]:
+            s = src / rel
+            d = dst / rel
+            if s.exists():
+                d.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(s, d)
+        # Local Storage holds YTM login state beyond just cookies
+        src_ls, dst_ls = src / "Local Storage", dst / "Local Storage"
+        if src_ls.exists():
+            if dst_ls.exists():
+                shutil.rmtree(dst_ls)
+            shutil.copytree(src_ls, dst_ls)
 
     def _start_xvfb(self) -> None:
         try:
@@ -169,6 +193,10 @@ class YTMBrowser:
             await self._playwright.stop()
         if self._xvfb:
             self._xvfb.terminate()
+        # After a --login session on the real profile, copy the session into
+        # the yui profile so normal (Xvfb) mode is already signed in.
+        if self.visible and getattr(self, "_active_profile", None) == REAL_PROFILE_DIR:
+            self._sync_session_to_yui()
 
     # ------------------------------------------------------------------ history
 
