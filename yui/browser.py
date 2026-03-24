@@ -8,26 +8,24 @@ import asyncio
 import dataclasses
 import json
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 BRAVE_PATH = "/usr/bin/brave-browser"
-# yui's own sandboxed profile (used for headless Xvfb operation)
-PROFILE_DIR = Path.home() / ".config" / "yui" / "browser-profile"
-# Real Brave profile — used during --login so the session is already present
 REAL_PROFILE_DIR = Path.home() / ".config" / "BraveSoftware" / "Brave-Browser"
+# Fallback profile when real Brave profile doesn't exist
+PROFILE_DIR = Path.home() / ".config" / "yui" / "browser-profile"
 HISTORY_FILE = Path.home() / ".config" / "yui" / "history.json"
 YTM_URL = "https://music.youtube.com"
 HISTORY_MAX = 50
 
 TYPE_ICONS = {
-    "song": "♪",
-    "album": "💿",
-    "playlist": "≡",
-    "artist": "👤",
-    "video": "▶",
+    "song":     "\uf001",  # nf-fa-music
+    "album":    "\uf51f",  # nf-fa-compact_disc
+    "playlist": "\uf0ca",  # nf-fa-list_ul
+    "artist":   "\uf007",  # nf-fa-user
+    "video":    "\uf03d",  # nf-fa-video_camera
 }
 
 
@@ -50,11 +48,11 @@ class SearchResult:
 
 
 class YTMBrowser:
-    def __init__(self, visible: bool = False):
-        self.visible = visible
+    def __init__(self):
         self._playwright = None
         self._context = None
         self._page = None
+        self._search_page = None  # separate page for search/browse so player keeps running
         self._xvfb: subprocess.Popen | None = None
 
     # ------------------------------------------------------------------ lifecycle
@@ -62,19 +60,15 @@ class YTMBrowser:
     async def start(self) -> None:
         from playwright.async_api import async_playwright
 
-        # --login: open on real display using real Brave profile (already signed in).
-        # normal:  Xvfb + yui-specific profile (session copied from real profile).
-        active_profile = REAL_PROFILE_DIR if (self.visible and REAL_PROFILE_DIR.exists()) else PROFILE_DIR
-        active_profile.mkdir(parents=True, exist_ok=True)
-        self._active_profile = active_profile
-        self._remove_stale_locks(active_profile)
+        profile = REAL_PROFILE_DIR if REAL_PROFILE_DIR.exists() else PROFILE_DIR
+        profile.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_locks(profile)
 
-        if not self.visible:
-            self._start_xvfb()
+        self._start_xvfb()
 
         self._playwright = await async_playwright().start()
         self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(active_profile),
+            user_data_dir=str(profile),
             headless=False,
             executable_path=BRAVE_PATH,
             args=[
@@ -84,6 +78,7 @@ class YTMBrowser:
                 "--disable-default-apps",
                 "--autoplay-policy=no-user-gesture-required",
                 "--no-sandbox",
+                "--restore-last-session",
             ],
             ignore_default_args=[
                 "--enable-automation",
@@ -93,19 +88,30 @@ class YTMBrowser:
             ],
         )
 
+        # Wait briefly for Brave to restore previous session tabs before inspecting URLs
+        await asyncio.sleep(2)
         pages = self._context.pages
         self._page = next((p for p in pages if p.url.startswith(YTM_URL)), None)
 
         if self._page is None:
             self._page = pages[0] if pages else await self._context.new_page()
             await self._page.goto(YTM_URL, wait_until="domcontentloaded", timeout=20000)
-            await self._page.wait_for_timeout(2000)
+            try:
+                await self._page.wait_for_selector("ytmusic-player-bar", timeout=8000)
+            except Exception:
+                pass
         else:
             # Restored tab — wait for it to finish loading, but don't block forever
             try:
                 await self._page.wait_for_load_state("domcontentloaded", timeout=8000)
             except Exception:
                 pass
+
+        self._page.set_default_timeout(5000)
+
+        # Pre-create search page so the first search has no page-creation overhead
+        self._search_page = await self._context.new_page()
+        self._search_page.set_default_timeout(5000)
 
         try:
             await self._page.add_init_script(
@@ -116,6 +122,8 @@ class YTMBrowser:
             pass
 
         await self._handle_consent()
+        # Open queue panel at startup so items are in the DOM for all future get_queue() calls
+        await self._open_queue_panel()
 
     def _remove_stale_locks(self, profile: Path) -> None:
         """Remove SingletonLock only if the owning process is no longer alive."""
@@ -133,25 +141,6 @@ class YTMBrowser:
         except (ValueError, OSError):
             for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
                 (profile / name).unlink(missing_ok=True)
-
-    def _sync_session_to_yui(self) -> None:
-        """Copy Google session cookies from the real Brave profile to yui's profile."""
-        src = REAL_PROFILE_DIR / "Default"
-        dst = PROFILE_DIR / "Default"
-        dst.mkdir(parents=True, exist_ok=True)
-        # Cookies live in different places across Brave versions
-        for rel in [Path("Cookies"), Path("Network") / "Cookies"]:
-            s = src / rel
-            d = dst / rel
-            if s.exists():
-                d.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(s, d)
-        # Local Storage holds YTM login state beyond just cookies
-        src_ls, dst_ls = src / "Local Storage", dst / "Local Storage"
-        if src_ls.exists():
-            if dst_ls.exists():
-                shutil.rmtree(dst_ls)
-            shutil.copytree(src_ls, dst_ls)
 
     def _start_xvfb(self) -> None:
         try:
@@ -193,10 +182,6 @@ class YTMBrowser:
             await self._playwright.stop()
         if self._xvfb:
             self._xvfb.terminate()
-        # After a --login session on the real profile, copy the session into
-        # the yui profile so normal (Xvfb) mode is already signed in.
-        if self.visible and getattr(self, "_active_profile", None) == REAL_PROFILE_DIR:
-            self._sync_session_to_yui()
 
     # ------------------------------------------------------------------ history
 
@@ -285,8 +270,13 @@ class YTMBrowser:
         try:
             await self._page.locator("#volume-slider").evaluate(f"""el => {{
                 el.value = {level};
-                el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                const inner = el.shadowRoot?.querySelector('#input') || el.shadowRoot?.querySelector('input');
+                if (inner) {{
+                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                    setter.call(inner, {level});
+                    inner.dispatchEvent(new Event('input', {{bubbles: true, composed: true}}));
+                    inner.dispatchEvent(new Event('change', {{bubbles: true, composed: true}}));
+                }}
             }}""")
         except Exception:
             pass
@@ -299,13 +289,21 @@ class YTMBrowser:
 
     # ------------------------------------------------------------------ search
 
+    async def _get_search_page(self):
+        """Return the dedicated search/browse page, creating it if needed."""
+        if self._search_page is None or self._search_page.is_closed():
+            self._search_page = await self._context.new_page()
+            self._search_page.set_default_timeout(5000)
+        return self._search_page
+
     async def search(self, query: str) -> list[SearchResult]:
         try:
+            page = await self._get_search_page()
             encoded = query.replace(" ", "+")
-            await self._page.goto(f"{YTM_URL}/search?q={encoded}", wait_until="domcontentloaded")
-            await self._page.wait_for_timeout(2000)
+            await page.goto(f"{YTM_URL}/search?q={encoded}", wait_until="domcontentloaded", timeout=15000)
+            await page.wait_for_selector("ytmusic-responsive-list-item-renderer", timeout=8000)
 
-            items = await self._page.evaluate("""
+            items = await page.evaluate("""
                 () => {
                     const kindFromHref = (href) => {
                         if (!href)                           return 'song';
@@ -337,10 +335,11 @@ class YTMBrowser:
 
     async def get_page_tracks(self, url: str) -> list[SearchResult]:
         try:
-            await self._page.goto(url, wait_until="commit", timeout=15000)
-            await self._page.wait_for_timeout(2000)
+            page = await self._get_search_page()
+            await page.goto(url, wait_until="commit", timeout=15000)
+            await page.wait_for_selector("ytmusic-responsive-list-item-renderer", timeout=8000)
 
-            items = await self._page.evaluate("""
+            items = await page.evaluate("""
                 () => {
                     let rows = Array.from(document.querySelectorAll(
                         'ytmusic-shelf-renderer ytmusic-responsive-list-item-renderer,' +
@@ -362,6 +361,64 @@ class YTMBrowser:
         except Exception:
             return []
 
+    async def get_artist_items(self, url: str) -> list[SearchResult]:
+        """Fetch albums, singles, playlists and top songs from an artist page."""
+        page = await self._get_search_page()
+        try:
+            await page.goto(url, wait_until="commit", timeout=15000)
+            await page.wait_for_selector(
+                "ytmusic-two-row-item-renderer, ytmusic-responsive-list-item-renderer",
+                timeout=8000,
+            )
+        except Exception:
+            return []
+        try:
+            items = await page.evaluate("""
+                () => {
+                    const kindFromHref = (href) => {
+                        if (!href || href.includes('watch?v=')) return 'song';
+                        if (href.includes('playlist?list=') ||
+                            href.includes('/browse/RDCLAK') ||
+                            href.includes('/browse/VL'))     return 'playlist';
+                        if (href.includes('/browse/'))       return 'album';
+                        return 'song';
+                    };
+                    const seen = new Set();
+                    const results = [];
+                    const add = (title, subtitle, href, kind) => {
+                        if (!title || seen.has(href)) return;
+                        seen.add(href);
+                        results.push({ title, subtitle, href, kind });
+                    };
+                    // Carousel shelves: albums, singles, playlists
+                    document.querySelectorAll('ytmusic-two-row-item-renderer').forEach(el => {
+                        const title    = el.querySelector('.title')?.textContent?.trim() || '';
+                        const subtitle = el.querySelector('.subtitle')?.textContent?.trim() || '';
+                        const a        = el.querySelector('a.main-link, a.yt-simple-endpoint');
+                        add(title, subtitle, a?.href || '', kindFromHref(a?.href));
+                    });
+                    // List shelves: top songs
+                    document.querySelectorAll('ytmusic-responsive-list-item-renderer').forEach(el => {
+                        const title    = el.querySelector('.title')?.textContent?.trim() || '';
+                        const subtitle = el.querySelector('.subtitle')?.textContent?.trim() || '';
+                        const a        = el.querySelector('a[href*="watch"]') || el.querySelector('a.main-link');
+                        add(title, subtitle, a?.href || '', kindFromHref(a?.href));
+                    });
+                    return results;
+                }
+            """)
+            return [SearchResult(**i) for i in items]
+        except Exception:
+            return []
+
+    async def find_artist_url(self, name: str) -> str:
+        """Search for an artist by name and return their page URL, or '' if not found."""
+        results = await self.search(name)
+        for r in results:
+            if r.kind == "artist":
+                return r.href
+        return ""
+
     # ------------------------------------------------------------------ play
 
     async def play_result(self, result: SearchResult) -> None:
@@ -369,7 +426,7 @@ class YTMBrowser:
             return
         try:
             await self._page.goto(result.href, wait_until="commit", timeout=15000)
-            await self._page.wait_for_timeout(2000)
+            await self._page.wait_for_selector("#play-pause-button, ytmusic-play-button-renderer", timeout=8000)
 
             if result.kind in ("album", "playlist"):
                 for selector in ['[aria-label="Play"]', "ytmusic-play-button-renderer", ".play-button-shape button"]:
@@ -382,6 +439,110 @@ class YTMBrowser:
             pass
 
     # ------------------------------------------------------------------ queue
+
+    async def _open_queue_panel(self) -> None:
+        """Open the queue panel if not already open, wait for items to be in the DOM."""
+        try:
+            # If items are already present the panel is already open — don't toggle it closed
+            items = await self._page.query_selector_all("ytmusic-player-queue-item")
+            if items:
+                return
+            await self._page.click("#queue-button", timeout=3000)
+            await self._page.wait_for_selector("ytmusic-player-queue-item", timeout=5000)
+        except Exception:
+            pass
+
+    async def _ensure_queue_panel_open(self) -> None:
+        """Re-open queue panel if items are missing (e.g. after navigation)."""
+        try:
+            items = await self._page.query_selector_all("ytmusic-player-queue-item")
+            if not items:
+                await self._open_queue_panel()
+        except Exception:
+            pass
+
+    async def remove_from_queue(self, indices: list[int]) -> None:
+        """Remove queue items at the given indices (processed back-to-front)."""
+        await self._ensure_queue_panel_open()
+        for idx in sorted(indices, reverse=True):
+            try:
+                items = await self._page.query_selector_all("ytmusic-player-queue-item")
+                if idx >= len(items):
+                    continue
+                item = items[idx]
+                await item.scroll_into_view_if_needed()
+                # Try dedicated more-button first, fall back to right-click
+                btn = await item.query_selector(
+                    "ytmusic-menu-renderer #button, .more-button button, "
+                    "[aria-label='More actions'], [aria-label='More options']"
+                )
+                if btn:
+                    await btn.click()
+                else:
+                    await item.click(button="right")
+                # Menu text varies by locale; try both common labels
+                for label in ("Remove from queue", "Remove from Queue"):
+                    try:
+                        await self._page.click(
+                            f"ytmusic-menu-service-item-renderer:has-text('{label}')",
+                            timeout=1500,
+                        )
+                        break
+                    except Exception:
+                        continue
+                await self._page.wait_for_timeout(150)
+            except Exception:
+                pass
+
+    async def add_to_queue(self, indices: list[int]) -> None:
+        """Add search/browse result rows at the given indices to the player queue."""
+        page = await self._get_search_page()
+        for idx in indices:
+            try:
+                rows = await page.query_selector_all("ytmusic-responsive-list-item-renderer")
+                if idx >= len(rows):
+                    continue
+                row = rows[idx]
+                await row.scroll_into_view_if_needed()
+                await row.hover()
+                btn = await row.query_selector(".more-button button, [aria-label='More actions']")
+                if not btn:
+                    continue
+                await btn.click()
+                await page.click(
+                    "ytmusic-menu-service-item-renderer:has-text('Add to queue')",
+                    timeout=2000,
+                )
+                await page.wait_for_timeout(150)
+            except Exception:
+                pass
+
+    async def move_queue_items(self, indices: list[int], direction: int) -> None:
+        """Move a contiguous block of queue items up (-1) or down (+1) one position."""
+        await self._ensure_queue_panel_open()
+        try:
+            if direction == -1:
+                for idx in sorted(indices):
+                    if idx == 0:
+                        continue
+                    items = await self._page.query_selector_all("ytmusic-player-queue-item")
+                    if idx < len(items) and idx - 1 >= 0:
+                        await self._page.drag_and_drop(
+                            f"ytmusic-player-queue-item:nth-child({idx + 1})",
+                            f"ytmusic-player-queue-item:nth-child({idx})",
+                        )
+                        await self._page.wait_for_timeout(100)
+            else:
+                for idx in sorted(indices, reverse=True):
+                    items = await self._page.query_selector_all("ytmusic-player-queue-item")
+                    if idx + 1 < len(items):
+                        await self._page.drag_and_drop(
+                            f"ytmusic-player-queue-item:nth-child({idx + 1})",
+                            f"ytmusic-player-queue-item:nth-child({idx + 2})",
+                        )
+                        await self._page.wait_for_timeout(100)
+        except Exception:
+            pass
 
     async def get_queue(self) -> list[dict]:
         try:
@@ -396,3 +557,4 @@ class YTMBrowser:
             """)
         except Exception:
             return []
+
