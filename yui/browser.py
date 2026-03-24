@@ -13,7 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BRAVE_PATH = "/usr/bin/brave-browser"
-PROFILE_DIR = Path.home() / ".config" / "yui" / "browser-profile"
+# Use the real Brave profile so sessions/passwords/settings are already there.
+# Falls back to a dedicated yui profile if Brave was never installed normally.
+_REAL_PROFILE = Path.home() / ".config" / "BraveSoftware" / "Brave-Browser"
+_YUI_PROFILE = Path.home() / ".config" / "yui" / "browser-profile"
+PROFILE_DIR = _REAL_PROFILE if _REAL_PROFILE.exists() else _YUI_PROFILE
 HISTORY_FILE = Path.home() / ".config" / "yui" / "history.json"
 YTM_URL = "https://music.youtube.com"
 HISTORY_MAX = 50
@@ -59,6 +63,7 @@ class YTMBrowser:
         from playwright.async_api import async_playwright
 
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        _YUI_PROFILE.mkdir(parents=True, exist_ok=True)  # always ensure fallback exists
         for lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
             (PROFILE_DIR / lock).unlink(missing_ok=True)
 
