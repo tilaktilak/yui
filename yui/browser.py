@@ -14,7 +14,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote_plus
 
-BRAVE_PATH = "/usr/bin/brave-browser"
+def _find_brave() -> str:
+    """Return the path to the Brave browser executable, or raise RuntimeError."""
+    # Honour explicit override first.
+    if env := os.environ.get("BRAVE_PATH"):
+        return env
+    candidates = [
+        "/usr/bin/brave-browser",
+        "/usr/bin/brave",
+        "/usr/local/bin/brave-browser",
+        "/usr/local/bin/brave",
+        "/opt/brave.com/brave/brave",
+        "/opt/brave/brave",
+        # Flatpak
+        "/var/lib/flatpak/exports/bin/com.brave.Browser",
+        os.path.expanduser("~/.local/share/flatpak/exports/bin/com.brave.Browser"),
+        # Snap
+        "/snap/bin/brave",
+    ]
+    for p in candidates:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    # Last resort: search PATH
+    if found := shutil.which("brave-browser") or shutil.which("brave"):
+        return found
+    raise RuntimeError(
+        "Brave browser not found. Install it from https://brave.com/linux/ "
+        "or set the BRAVE_PATH environment variable."
+    )
 REAL_PROFILE_DIR = Path.home() / ".config" / "BraveSoftware" / "Brave-Browser"
 PROFILE_DIR = Path.home() / ".config" / "yui" / "browser-profile"
 HISTORY_FILE = Path.home() / ".config" / "yui" / "history.json"
@@ -71,7 +98,7 @@ class YTMBrowser:
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE_DIR),
             headless=False,
-            executable_path=BRAVE_PATH,
+            executable_path=_find_brave(),
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-first-run",
