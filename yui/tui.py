@@ -167,7 +167,8 @@ class YuiApp(App):
         Binding("slash,s", "focus_search", "Search"),
         Binding("r", "show_recent", "Recent"),
         Binding("q", "toggle_view", "Queue/Results"),
-        Binding("escape", "go_back", "Back", show=False),
+        Binding("escape,ctrl+p", "go_back", "Back", show=False),
+        Binding("ctrl+n", "go_forward", "Forward", show=False),
         Binding("plus,equal", "vol_up", "Vol+"),
         Binding("minus", "vol_down", "Vol-"),
         Binding("L", "toggle_like", "Like"),
@@ -190,6 +191,7 @@ class YuiApp(App):
         self._mode: str = "queue"
         self._current_results: list[SearchResult] = []
         self._back_stack: list[ListState] = []
+        self._forward_stack: list[ListState] = []
         self._volume: int = 50
         self._queue_sig: str = ""
         self._current_label: str = "Queue"
@@ -402,6 +404,7 @@ class YuiApp(App):
             self._set_status("No history yet.")
             return
         self._back_stack.clear()
+        self._forward_stack.clear()
         self._current_results = history
         self._mode = "recent"
         self._set_label("Recent")
@@ -439,6 +442,7 @@ class YuiApp(App):
             search.value = ""
             self.query_one("#results-list", ListView).focus()
             return
+        self._forward_stack.append(self._snapshot())
         if self._back_stack:
             self._restore_state(self._back_stack.pop())
         else:
@@ -447,6 +451,13 @@ class YuiApp(App):
             self._set_label("Queue")
             self._set_status("Queue")
             self._do_set_list([])
+        self.query_one("#results-list", ListView).focus()
+
+    def action_go_forward(self) -> None:
+        if not self._forward_stack:
+            return
+        self._back_stack.append(self._snapshot())
+        self._restore_state(self._forward_stack.pop())
         self.query_one("#results-list", ListView).focus()
 
     def action_visual_mode(self) -> None:
@@ -530,6 +541,7 @@ class YuiApp(App):
             self.query_one("#results-list", ListView).focus()
             return
         self._back_stack.clear()
+        self._forward_stack.clear()
         self._do_search(query)
 
     _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -625,6 +637,7 @@ class YuiApp(App):
 
     @work
     async def _open_artist(self, result: SearchResult) -> None:
+        self._forward_stack.clear()
         self._back_stack.append(ListState(
             mode=self._mode,
             label=self._current_label,
@@ -650,6 +663,7 @@ class YuiApp(App):
 
     @work
     async def _open_collection(self, result: SearchResult) -> None:
+        self._forward_stack.clear()
         self._back_stack.append(ListState(
             mode=self._mode,
             label=self._current_label,
@@ -687,6 +701,7 @@ class YuiApp(App):
         self.browser.save_to_history(result)
         self._mode = "queue"
         self._back_stack.clear()
+        self._forward_stack.clear()
         self._queue_sig = ""
         self._set_status(f"Playing: {result.title}")
 
@@ -709,6 +724,14 @@ class YuiApp(App):
         self._set_label("Recent")
         await self._set_list_items([self._fmt(r) for r in history])
         self._set_status(f"{len(history)} recent items  —  r to refresh, / to search")
+
+    def _snapshot(self) -> ListState:
+        return ListState(
+            mode=self._mode,
+            label=self._current_label,
+            results=list(self._current_results),
+            status=self._current_status,
+        )
 
     def _restore_state(self, state: ListState) -> None:
         self._mode = state.mode
