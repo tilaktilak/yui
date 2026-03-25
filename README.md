@@ -82,8 +82,8 @@ yui --daemon # run daemon in the foreground (for debugging)
 | `L` | Like current track |
 | `r` | Show recently played |
 | `q` | Toggle queue / results |
-| `Esc` / `Ctrl+P` | Go back |
-| `Ctrl+N` | Go forward |
+| `Esc` / `Ctrl+O` | Go back |
+| `Ctrl+I` | Go forward |
 | `g` `g` | Jump to top |
 | `G` | Jump to bottom |
 | `g` `a` | Go to artist |
