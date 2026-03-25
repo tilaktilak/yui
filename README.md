@@ -111,6 +111,15 @@ Data files:
 | `~/.config/yui/browser-profile/` | Brave profile used by yui |
 | `~/.config/yui/history.json` | Recently played (max 50) |
 
+## Neovim plugin
+
+[tilaktilak/nvim-yui](https://github.com/tilaktilak/nvim-yui) integrates yui into Neovim — control playback, search, and browse your queue without leaving the editor.
+
+```lua
+-- lazy.nvim
+{ "tilaktilak/nvim-yui" }
+```
+
 ## Autostart
 
 To launch yui automatically at login, add it to your window manager's autostart. For example in `~/.config/qtile/config.py`:
