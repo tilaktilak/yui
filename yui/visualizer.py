@@ -60,8 +60,26 @@ class AudioVisualizer:
         self._thread.start()
         return True
 
-    def _run(self) -> None:
+    def _precompute_bar_bins(self) -> list[np.ndarray]:
+        """Map each bar to FFT bin indices.
+
+        At low frequencies the log-spaced bar width can be narrower than one
+        FFT bin (~21.5 Hz at 44100/2048).  When that happens we fall back to
+        the single nearest bin so the bar always has data.
+        """
         freqs = np.fft.rfftfreq(CHUNK, 1.0 / SAMPLE_RATE)
+        bar_bins = []
+        for i in range(self._bars):
+            lo, hi = float(self._bin_edges[i]), float(self._bin_edges[i + 1])
+            indices = np.where((freqs >= lo) & (freqs < hi))[0]
+            if len(indices) == 0:
+                nearest = int(np.argmin(np.abs(freqs - (lo + hi) / 2)))
+                indices = np.array([nearest])
+            bar_bins.append(indices)
+        return bar_bins
+
+    def _run(self) -> None:
+        bar_bins = self._precompute_bar_bins()
         window = np.hanning(CHUNK)
         peak = 1e-6
 
@@ -72,10 +90,7 @@ class AudioVisualizer:
             samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
             fft = np.abs(np.fft.rfft(samples * window))
 
-            levels = []
-            for i in range(self._bars):
-                mask = (freqs >= self._bin_edges[i]) & (freqs < self._bin_edges[i + 1])
-                levels.append(float(np.sqrt(np.mean(fft[mask] ** 2))) if mask.any() else 0.0)
+            levels = [float(np.sqrt(np.mean(fft[idx] ** 2))) for idx in bar_bins]
 
             arr = np.array(levels)
             peak = max(peak * 0.998, float(arr.max()) or 1e-6)
