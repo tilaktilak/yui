@@ -11,6 +11,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 import gi
@@ -23,10 +24,14 @@ from yui.daemon import PID_PATH, SOCKET_PATH, is_running
 # App icon names to try from the active GTK theme, in preference order.
 _ICON_NAMES = ["gnome-music", "music-app", "rhythmbox", "audio-x-generic"]
 
+# Use the venv Python passed by __main__.py, so subprocesses work even after
+# we re-exec under system python3 (needed for gi/AppIndicator3).
+_YUI_PYTHON = os.environ.get("YUI_PYTHON", sys.executable)
+
 
 def _find_terminal_cmd() -> list[str]:
     """Return a command list that opens a terminal running yui."""
-    yui = f"{sys.executable} -m yui"
+    yui = f"{_YUI_PYTHON} -m yui"
     env_term = os.environ.get("TERMINAL", "")
     candidates = ([env_term] if env_term else []) + [
         "kitty", "alacritty", "wezterm", "foot",
@@ -63,16 +68,18 @@ def _kill_daemon() -> None:
 
 
 def _restart_daemon(*_) -> None:
-    _kill_daemon()
-    for _ in range(20):
-        if not is_running() and not SOCKET_PATH.exists():
-            break
-        time.sleep(0.3)
-    subprocess.Popen(
-        [sys.executable, "-m", "yui", "--daemon"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    def _do() -> None:
+        _kill_daemon()
+        for _ in range(20):
+            if not is_running() and not SOCKET_PATH.exists():
+                break
+            time.sleep(0.3)
+        subprocess.Popen(
+            [_YUI_PYTHON, "-m", "yui", "--daemon"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    threading.Thread(target=_do, daemon=True).start()
 
 
 def _quit(*_) -> None:
@@ -105,7 +112,7 @@ def run_tray() -> None:
     """Start the tray icon, launching the daemon first if needed."""
     if not is_running():
         subprocess.Popen(
-            [sys.executable, "-m", "yui", "--daemon"],
+            [_YUI_PYTHON, "-m", "yui", "--daemon"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

@@ -41,8 +41,12 @@ def _start_tray() -> None:
     """Spawn the tray as a background process (non-blocking)."""
     if _is_tray_running():
         return
+    # Pass the venv Python path so the tray can spawn subprocesses correctly
+    # even after re-exec'ing under system python3 to access gi/AppIndicator3.
+    env = {**os.environ, "YUI_PYTHON": sys.executable}
     subprocess.Popen(
         [sys.executable, "-m", "yui", "--tray"],
+        env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
