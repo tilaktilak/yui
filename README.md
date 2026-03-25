@@ -2,24 +2,7 @@
 
 A YouTube Music TUI powered by a headless Brave browser.
 
-```
-┌─────────────────────────────────────────────────────┐
-│ yui                                           Header │
-├─────────────────────────────────────────────────────┤
-│ ▶  Fluorescent Adolescent                           │
-│    Arctic Monkeys                                   │
-│ ████████████░░░░░░░░░░  1:23 / 2:57                │
-├─────────────────────────────────────────────────────┤
-│ / or s to search…                                   │
-├─────────────────────────────────────────────────────┤
-│ Queue                                               │
-│   ♪ Do I Wanna Know?  —  Arctic Monkeys             │
-│ ▶ ♪ Fluorescent Adolescent  —  Arctic Monkeys       │
-│   ♪ R U Mine?  —  Arctic Monkeys                    │
-└─────────────────────────────────────────────────────┘
-│ Ready                                    Vol: 70%   │
-└─────────────────────────────────────────────────────┘
-```
+![preview](preview.gif)
 
 ## Requirements
 
