@@ -38,8 +38,8 @@ class SpectrumWidget(Widget):
     }
     """
 
-    def __init__(self, visualizer: AudioVisualizer) -> None:
-        super().__init__()
+    def __init__(self, visualizer: AudioVisualizer, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._viz = visualizer
 
     def on_mount(self) -> None:
