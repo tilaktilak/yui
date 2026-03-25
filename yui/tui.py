@@ -5,10 +5,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.widget import Widget
 from textual.widgets import (
     Footer,
     Header,
@@ -21,6 +23,62 @@ from textual.widgets import (
 )
 
 from yui.browser import TYPE_ICONS, SearchResult, YTMBrowser
+from yui.visualizer import AudioVisualizer
+
+_VIZ_HEIGHT = 3
+_BLOCKS = " ▁▂▃▄▅▆▇█"
+
+
+class SpectrumWidget(Widget):
+    DEFAULT_CSS = """
+    SpectrumWidget {
+        height: 3;
+        width: 100%;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, visualizer: AudioVisualizer) -> None:
+        super().__init__()
+        self._viz = visualizer
+
+    def on_mount(self) -> None:
+        self.set_interval(1 / 20, self.refresh)
+
+    def render(self) -> Text:
+        levels = self._viz.get_levels()
+        width = max(1, self.size.width)
+
+        # Interpolate bars to fill widget width
+        n = len(levels)
+        if n == 0:
+            return Text(" " * width * _VIZ_HEIGHT)
+        if n != width:
+            rendered = []
+            for i in range(width):
+                src = i * (n - 1) / max(width - 1, 1)
+                lo = int(src)
+                hi = min(lo + 1, n - 1)
+                t = src - lo
+                rendered.append(levels[lo] * (1 - t) + levels[hi] * t)
+        else:
+            rendered = levels
+
+        result = Text(no_wrap=True, overflow="crop")
+        for row in range(_VIZ_HEIGHT):
+            for lvl in rendered:
+                total_e = lvl * _VIZ_HEIGHT * 8
+                bottom_e = (_VIZ_HEIGHT - 1 - row) * 8
+                contrib = total_e - bottom_e
+                if contrib <= 0:
+                    result.append(" ")
+                else:
+                    char = "█" if contrib >= 8 else _BLOCKS[max(1, int(contrib))]
+                    color = "green" if lvl < 0.5 else ("yellow" if lvl < 0.8 else "red")
+                    result.append(char, style=color)
+            if row < _VIZ_HEIGHT - 1:
+                result.append("\n")
+        return result
 
 
 @dataclass
@@ -49,6 +107,7 @@ class YuiApp(App):
     #time-row     { width: 100%; height: 1; }
     #current-time { width: 1fr; }
     #track-duration { width: 1fr; text-align: right; }
+    #spectrum { margin-top: 1; width: 100%; height: 3; }
 
     #search-input { margin: 1 1 0 1; height: 3; }
 
@@ -126,6 +185,7 @@ class YuiApp(App):
         super().__init__()
         self._loading_msg = loading_msg
         self.browser = browser or YTMBrowser()
+        self._visualizer = AudioVisualizer()
         self._mode: str = "queue"
         self._current_results: list[SearchResult] = []
         self._back_stack: list[ListState] = []
@@ -161,6 +221,7 @@ class YuiApp(App):
             with Horizontal(id="time-row"):
                 yield Label("0:00", id="current-time")
                 yield Label("0:00", id="track-duration")
+            yield SpectrumWidget(self._visualizer, id="spectrum")
         yield Input(placeholder="/ or s to search…", id="search-input")
         with Vertical(id="results-area"):
             yield Label("Queue", id="results-label")
@@ -200,6 +261,10 @@ class YuiApp(App):
 
         self._volume = await self.browser.get_volume()
         self._update_vol_label()
+
+        # Start visualizer; hide the widget if parec is unavailable.
+        if not self._visualizer.start():
+            self.query_one("#spectrum").display = False
 
         self.set_interval(1.0, self._refresh_track)
         self.set_interval(10.0, self._refresh_queue)
@@ -623,6 +688,7 @@ class YuiApp(App):
     # ------------------------------------------------------------------ cleanup
 
     async def on_unmount(self) -> None:
+        self._visualizer.stop()
         await self.browser.close()
 
     # ------------------------------------------------------------------ helpers
