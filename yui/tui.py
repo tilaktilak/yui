@@ -501,9 +501,13 @@ class YuiApp(App):
         if self._visual_mode:
             return
         idx = event.list_view.index
-        if idx is None or idx >= len(self._current_results):
+        if idx is None:
             return
         if self._mode == "queue":
+            if idx < len(self._queue_data):
+                self._play_queue_item(idx)
+            return
+        if idx >= len(self._current_results):
             return
 
         result = self._current_results[idx]
@@ -598,6 +602,13 @@ class YuiApp(App):
         await self._set_list_items([self._fmt(t) for t in tracks])
         self._set_status(f"{len(tracks)} tracks  —  Enter to play, Esc to go back")
         self.query_one("#results-list", ListView).focus()
+
+    @work
+    async def _play_queue_item(self, index: int) -> None:
+        title = self._queue_data[index].get("title", "") if index < len(self._queue_data) else ""
+        self._set_status(f"Playing: {title}…" if title else "Playing…")
+        await self.browser.play_queue_item(index)
+        self._queue_sig = ""
 
     @work
     async def _play(self, result: SearchResult) -> None:

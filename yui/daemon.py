@@ -121,6 +121,9 @@ async def _dispatch(browser: YTMBrowser, req: dict) -> dict:
                 return {"result": None}
             case "get_queue":
                 return {"result": await browser.get_queue()}
+            case "play_queue_item":
+                await browser.play_queue_item(req["index"])
+                return {"result": None}
             case "search":
                 r = await browser.search(req["query"])
                 return {"result": [dataclasses.asdict(x) for x in r]}

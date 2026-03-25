@@ -83,6 +83,9 @@ class YTMClient:
     async def get_queue(self) -> list[dict]:
         return await self._call("get_queue")
 
+    async def play_queue_item(self, index: int) -> None:
+        await self._call("play_queue_item", index=index)
+
     async def search(self, query: str) -> list[SearchResult]:
         return [SearchResult(**i) for i in await self._call("search", query=query)]
 

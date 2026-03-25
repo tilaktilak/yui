@@ -630,3 +630,14 @@ class YTMBrowser:
         except Exception:
             return []
 
+    async def play_queue_item(self, index: int) -> None:
+        try:
+            await self._page.evaluate("""
+                (index) => {
+                    const items = document.querySelectorAll('ytmusic-player-queue-item');
+                    if (index < items.length) items[index].dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+                }
+            """, index)
+        except Exception:
+            pass
+
