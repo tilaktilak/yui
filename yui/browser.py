@@ -8,13 +8,14 @@ import asyncio
 import dataclasses
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote_plus
 
 BRAVE_PATH = "/usr/bin/brave-browser"
 REAL_PROFILE_DIR = Path.home() / ".config" / "BraveSoftware" / "Brave-Browser"
-# Fallback profile when real Brave profile doesn't exist
 PROFILE_DIR = Path.home() / ".config" / "yui" / "browser-profile"
 HISTORY_FILE = Path.home() / ".config" / "yui" / "history.json"
 YTM_URL = "https://music.youtube.com"
@@ -60,15 +61,15 @@ class YTMBrowser:
     async def start(self) -> None:
         from playwright.async_api import async_playwright
 
-        profile = REAL_PROFILE_DIR if REAL_PROFILE_DIR.exists() else PROFILE_DIR
-        profile.mkdir(parents=True, exist_ok=True)
-        self._remove_stale_locks(profile)
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        self._sync_profile()
+        self._remove_stale_locks(PROFILE_DIR)
 
         self._start_xvfb()
 
         self._playwright = await async_playwright().start()
         self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(profile),
+            user_data_dir=str(PROFILE_DIR),
             headless=False,
             executable_path=BRAVE_PATH,
             args=[
@@ -124,6 +125,50 @@ class YTMBrowser:
         await self._handle_consent()
         # Open queue panel at startup so items are in the DOM for all future get_queue() calls
         await self._open_queue_panel()
+
+    def _sync_profile(self) -> None:
+        """Copy the Default directory from the real Brave profile to yui's profile.
+
+        Only runs when real Brave is not currently open (safe to read its files).
+        Skips files that would cause conflicts (locks, singletons, crash data).
+        """
+        if not REAL_PROFILE_DIR.exists():
+            return
+        # Check if real Brave is running via its SingletonLock
+        lock = REAL_PROFILE_DIR / "SingletonLock"
+        if lock.exists():
+            try:
+                pid = int(os.readlink(lock).split("-")[-1])
+                os.kill(pid, 0)
+                return  # Brave is running — don't touch its files
+            except (ValueError, OSError):
+                pass  # stale lock, safe to proceed
+
+        src = REAL_PROFILE_DIR / "Default"
+        dst = PROFILE_DIR / "Default"
+        if not src.exists():
+            return
+
+        skip = {
+            "SingletonLock", "SingletonCookie", "SingletonSocket",
+            "lockfile", "LOCK", "LOG", "LOG.old",
+        }
+        skip_dirs = {"GPUCache", "Code Cache", "DawnGraphiteCache", "DawnWebGPUCache"}
+
+        dst.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            if item.name in skip or item.name in skip_dirs:
+                continue
+            d = dst / item.name
+            try:
+                if item.is_dir():
+                    if d.exists():
+                        shutil.rmtree(d)
+                    shutil.copytree(item, d)
+                else:
+                    shutil.copy2(item, d)
+            except Exception:
+                pass
 
     def _remove_stale_locks(self, profile: Path) -> None:
         """Remove SingletonLock only if the owning process is no longer alive."""
@@ -299,7 +344,7 @@ class YTMBrowser:
     async def search(self, query: str) -> list[SearchResult]:
         try:
             page = await self._get_search_page()
-            encoded = query.replace(" ", "+")
+            encoded = quote_plus(query)
             await page.goto(f"{YTM_URL}/search?q={encoded}", wait_until="domcontentloaded", timeout=15000)
             await page.wait_for_selector("ytmusic-responsive-list-item-renderer", timeout=8000)
 

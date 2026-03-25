@@ -145,6 +145,9 @@ class YuiApp(App):
         self._visual_anchor: int = 0
         self._visual_end: int = 0
         self._pre_visual_status: str = ""
+        # search spinner state
+        self._spinner_handle = None
+        self._spinner_idx: int = 0
 
     # ------------------------------------------------------------------ compose
 
@@ -307,10 +310,6 @@ class YuiApp(App):
         if self.query_one("#search-input", Input).has_focus:
             self._g_pending = False
             return
-        if event.key == "g":
-            self._g_pending = True
-            event.stop()
-            return
         if self._g_pending:
             self._g_pending = False
             if event.key == "g":
@@ -319,6 +318,10 @@ class YuiApp(App):
             elif event.key == "a":
                 event.stop()
                 self._go_to_artist()
+            return
+        if event.key == "g":
+            self._g_pending = True
+            event.stop()
 
     async def action_show_recent(self) -> None:
         history = self.browser.load_history()
@@ -401,15 +404,18 @@ class YuiApp(App):
 
     @work
     async def action_queue_selected(self) -> None:
-        if not self._visual_mode or self._mode == "queue":
+        if self._mode == "queue":
             return
-        indices = self._visual_indices()
+        lv = self.query_one("#results-list", ListView)
+        indices = self._visual_indices() if self._visual_mode else (
+            [lv.index] if lv.index is not None else []
+        )
         results = [self._current_results[i] for i in indices if i < len(self._current_results)]
-        hrefs = [r.href for r in results if r.href and r.kind not in ("album", "playlist", "artist")]
-        if hrefs:
-            self._set_status(f"Adding {len(hrefs)} track(s) to queue…")
+        valid = [r for r in results if r.href and r.kind != "artist"]
+        if valid:
+            self._set_status(f"Adding {len(valid)} item(s) to queue…")
             await self.browser.add_to_queue(indices)
-            self._set_status(f"Added {len(hrefs)} track(s) to queue")
+            self._set_status(f"Added {len(valid)} item(s) to queue")
         self._exit_visual_mode()
 
     @work
@@ -453,10 +459,30 @@ class YuiApp(App):
         self._back_stack.clear()
         self._do_search(query)
 
+    _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _start_spinner(self) -> None:
+        self._spinner_idx = 0
+        self._spinner_handle = self.set_interval(0.1, self._tick_spinner)
+
+    def _tick_spinner(self) -> None:
+        self._spinner_idx = (self._spinner_idx + 1) % len(self._SPINNER_FRAMES)
+        self.query_one("#search-input", Input).placeholder = (
+            self._SPINNER_FRAMES[self._spinner_idx] + " Searching…"
+        )
+
+    def _stop_spinner(self) -> None:
+        if self._spinner_handle:
+            self._spinner_handle.stop()
+            self._spinner_handle = None
+        self.query_one("#search-input", Input).placeholder = "/ or s to search…"
+
     @work
     async def _do_search(self, query: str) -> None:
+        self._start_spinner()
         self._set_status(f"Searching: {query}…")
         results = await self.browser.search(query)
+        self._stop_spinner()
         self._current_results = results
         self._mode = "search"
         self._set_label(f'Results for "{query}"')
@@ -623,8 +649,13 @@ class YuiApp(App):
         lv = self.query_one("#results-list", ListView)
         await lv.clear()
         for i, text in enumerate(items):
+            if not lv.is_attached:
+                return
             prefix = "▶ " if i == selected_idx else "  "
-            await lv.append(ListItem(Label(prefix + text)))
+            try:
+                await lv.append(ListItem(Label(prefix + text)))
+            except Exception:
+                return
 
     def _redraw_list(self) -> None:
         """Update list item prefixes in-place (preserves cursor position)."""
