@@ -6,9 +6,11 @@ Right-click → menu with Open / Restart daemon / Quit
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -59,6 +61,18 @@ def _open_tui(*_) -> None:
 
 
 def _kill_daemon() -> None:
+    # Try graceful IPC shutdown first so the browser closes cleanly.
+    if SOCKET_PATH.exists():
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(2.0)
+            sock.connect(str(SOCKET_PATH))
+            sock.sendall(json.dumps({"cmd": "shutdown"}).encode() + b"\n")
+            sock.close()
+            return
+        except Exception:
+            pass
+    # Fallback: SIGTERM
     if is_running():
         try:
             pid = int(PID_PATH.read_text().strip())

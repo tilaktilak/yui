@@ -23,6 +23,7 @@ from textual.widgets import (
 )
 
 from yui.browser import TYPE_ICONS, SearchResult, YTMBrowser
+from yui.daemon import is_running
 from yui.visualizer import AudioVisualizer
 
 _VIZ_HEIGHT = 3
@@ -200,6 +201,7 @@ class YuiApp(App):
         # raw queue data (title/artist dicts) for artist lookup from queue view
         self._queue_data: list[dict] = []
         # ga key sequence state
+        self._daemon_fail_count: int = 0
         self._g_pending: bool = False
         # visual mode state
         self._visual_mode: bool = False
@@ -284,8 +286,11 @@ class YuiApp(App):
             self.query_one("#track-progress", ProgressBar).progress = int(track.progress * 100)
             self.query_one("#current-time", Label).update(track.current_time)
             self.query_one("#track-duration", Label).update(track.duration)
+            self._daemon_fail_count = 0
         except Exception:
-            pass
+            self._daemon_fail_count += 1
+            if self._daemon_fail_count >= 3 and not is_running():
+                self.exit()
 
     async def _refresh_queue(self, force: bool = False) -> None:
         if self._mode != "queue" or self._visual_mode:
