@@ -150,6 +150,7 @@ class YTMBrowser:
             pass
 
         await self._handle_consent()
+        await self._restore_last_track()
         # Open queue panel at startup so items are in the DOM for all future get_queue() calls
         await self._open_queue_panel()
 
@@ -511,6 +512,20 @@ class YTMBrowser:
             pass
 
     # ------------------------------------------------------------------ queue
+
+    async def _restore_last_track(self) -> None:
+        """Navigate to the last played track if the page is still on the homepage."""
+        current = self._page.url.rstrip("/")
+        if current != YTM_URL.rstrip("/"):
+            return  # already on a track/playlist page — nothing to do
+        history = self.load_history()
+        if not history or not history[0].href:
+            return
+        try:
+            await self._page.goto(history[0].href, wait_until="domcontentloaded", timeout=15000)
+            await self._page.wait_for_selector("ytmusic-player-bar", timeout=8000)
+        except Exception:
+            pass
 
     async def _open_queue_panel(self) -> None:
         """Open the queue panel if not already open, wait for items to be in the DOM."""
