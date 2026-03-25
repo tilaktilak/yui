@@ -122,9 +122,10 @@ class YuiApp(App):
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
-    def __init__(self):
+    def __init__(self, browser=None, loading_msg: str = "Launching Brave…"):
         super().__init__()
-        self.browser = YTMBrowser()
+        self._loading_msg = loading_msg
+        self.browser = browser or YTMBrowser()
         self._mode: str = "queue"
         self._current_results: list[SearchResult] = []
         self._back_stack: list[ListState] = []
@@ -170,7 +171,7 @@ class YuiApp(App):
         yield Footer()
         with Vertical(id="loading-overlay"):
             yield LoadingIndicator()
-            yield Label("Launching Brave…")
+            yield Label(self._loading_msg)
 
     # ------------------------------------------------------------------ mount
 
@@ -181,17 +182,19 @@ class YuiApp(App):
 
     @work
     async def _init_browser(self) -> None:
-        """Start the browser in the background so the TUI renders immediately."""
+        """Start/connect the browser then hide the loading overlay."""
         try:
             await self.browser.start()
+            logged_in = await self.browser.is_logged_in()
         except Exception as e:
+            self.query_one("#loading-overlay").display = False
             self._set_status(f"Browser error: {e}")
             return
 
         self.query_one("#loading-overlay").display = False
 
-        if not await self.browser.is_logged_in():
-            self._set_status("Not logged in — run: uv run yui --login")
+        if not logged_in:
+            self._set_status("Not logged in — run: yui --login")
         else:
             self._set_status("Ready")
 
