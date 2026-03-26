@@ -344,7 +344,9 @@ class YTMBrowser(BaseBraveBrowser):
 
     # ------------------------------------------------------------------ play
 
-    async def play_result(self, result: SearchResult) -> None:
+    async def play_result(self, result) -> None:
+        if isinstance(result, dict):
+            result = SearchResult(**result)
         if not result.href:
             return
         try:
