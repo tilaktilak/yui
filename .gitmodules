@@ -1,0 +1,3 @@
+[submodule "brave_tui"]
+	path = brave_tui
+	url = git@github.com:tilaktilak/brave-tui.git

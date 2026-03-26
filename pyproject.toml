@@ -17,6 +17,9 @@ dependencies = [
 [project.scripts]
 yui = "yui.__main__:main"
 
+[tool.hatch.build.targets.wheel]
+packages = ["yui", "brave_tui"]
+
 [dependency-groups]
 dev = [
     "hatchling>=1.29.0",
