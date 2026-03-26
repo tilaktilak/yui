@@ -35,6 +35,24 @@ class YTMClient(BraveClient):
     async def get_artist_items(self, url: str) -> list[SearchResult]:
         return [SearchResult(**i) for i in await self._call("get_artist_items", url=url)]
 
+    async def set_volume(self, level: int) -> None:
+        await self._call("set_volume", level=level)
+
+    async def find_artist_url(self, name: str) -> str:
+        return await self._call("find_artist_url", name=name)
+
+    async def remove_from_queue(self, indices: list[int]) -> None:
+        await self._call("remove_from_queue", indices=indices)
+
+    async def add_to_queue(self, indices: list[int]) -> None:
+        await self._call("add_to_queue", indices=indices)
+
+    async def move_queue_items(self, indices: list[int], direction: int) -> None:
+        await self._call("move_queue_items", indices=indices, direction=direction)
+
+    async def play_queue_item(self, index: int) -> None:
+        await self._call("play_queue_item", index=index)
+
     async def play_result(self, result: SearchResult) -> None:
         await self._call("play_result", result=dataclasses.asdict(result))
 
