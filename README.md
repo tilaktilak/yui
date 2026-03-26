@@ -29,19 +29,16 @@ sudo apt install \
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### Playwright browsers
-
-```bash
-uv run playwright install chromium
-```
-
 ## Installation
 
 ```bash
-git clone https://github.com/yourname/yui
+git clone --recurse-submodules https://github.com/tilaktilak/yui
 cd yui
 uv tool install -e .
+uv run playwright install chromium
 ```
+
+> If you cloned without `--recurse-submodules`, run `git submodule update --init` before installing.
 
 ## First-time login
 
